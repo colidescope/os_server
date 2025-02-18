@@ -6,7 +6,7 @@ from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeSphere
 from OCC.Core.BRepGProp import brepgprop_LinearProperties, brepgprop_SurfaceProperties, brepgprop_VolumeProperties
 from OCC.Core.GProp import GProp_GProps
 
-from OCC.Extend.DataExchange import write_iges_file
+from OCC.Extend.DataExchange import write_step_file
 
 import os, json
 import boto3
@@ -22,8 +22,7 @@ if ENV != "PROD":
 app = FastAPI()
 
 class CreateObjectBody(BaseModel):
-    product: str
-    params: str
+    script: str
 
 # Fetch S3 configuration from environment variables
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
@@ -44,50 +43,56 @@ s3_client = boto3.client(
     region_name=S3_REGION
 )
 
-def get_cube(params):
+def create_cube(params):
     print("Generating cube with params:", params["x"], params["y"], params["z"])
     return BRepPrimAPI_MakeBox(params["x"], params["y"], params["z"]).Shape()
 
-def get_sphere(params):
-    print("Generating sphere with params:", params["r"])
-    return BRepPrimAPI_MakeSphere(params["r"]).Shape()
+def create_sphere(params):
+    print("Generating sphere with params:", params["R"])
+    return BRepPrimAPI_MakeSphere(params["R"]).Shape()
 
 function_map = {
-    "cube": get_cube,
-    "sphere": get_sphere
+    "Cube": create_cube,
+    "Sphere": create_sphere
 }
 
 @app.get("/items")
 def get_items():
     return list(function_map)
 
-@app.post("/create-object")
-async def create_object(object_data: CreateObjectBody):
+@app.post("/run-script")
+async def run_script(object_data: CreateObjectBody):
     
-    product = object_data.product
-    params = object_data.params
+    script = json.loads(object_data.script)
 
-    print(product, params)
+    component = script[0]
+    
+    name = component.get("name")
+    inputs = component.get("inputs")
 
     try:
-        geometry = function_map[product](json.loads(params))
+        geometry = function_map[name](inputs)
 
-        # Save IGES file locally
-        local_iges_filename = "{}.iges".format(uuid4())
-        write_iges_file(geometry, local_iges_filename)
+        # Save file locally
+        local_filename = "{}.step".format(uuid4())
+        write_step_file(geometry, local_filename)
 
-        s3_key = "iges_files/{}".format(local_iges_filename)
-        with open(local_iges_filename, "rb") as file:
-            s3_client.upload_fileobj(file, S3_BUCKET_NAME, s3_key, ExtraArgs={"ACL": "public-read"})
+        s3_key = "geo_files/{}".format(local_filename)
+        with open(local_filename, "rb") as file:
+            s3_client.upload_fileobj(file, S3_BUCKET_NAME, s3_key)
 
-        # Construct S3 file URL
-        s3_file_url = "https://{}.s3.{}.amazonaws.com/{}".format(S3_BUCKET_NAME, S3_REGION, s3_key)
+        # Generate a pre-signed URL for downloading the file
+        s3_file_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET_NAME, "Key": s3_key},
+            ExpiresIn=3600  # URL expiration time in seconds
+        )
 
         # Clean up local file
-        os.remove(local_iges_filename)
+        os.remove(local_filename)
 
         return {
-            "path_to_iges_file": s3_file_url
+            "path_to_file": s3_file_url
         }
 
     except Exception as e:
