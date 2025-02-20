@@ -1,8 +1,12 @@
 [
   {
     "name": "Sphere",
-    "inputs": {
-      "R": 10
-    }
+    "inputs": [
+      {
+        "name": "R",
+        "type": "number",
+        "value": 1
+      }
+    ]
   }
 ]

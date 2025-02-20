@@ -1,0 +1,49 @@
+[
+  {
+    "name": "Sphere",
+    "id": "60b87694-eaa4-4f17-8740-42355979dd71",
+    "inputs": [
+      {
+        "name": "R",
+        "type": "number",
+        "value": 1
+      }
+    ]
+  },
+  {
+    "name": "Vec",
+    "id": "d0d21888-51e1-4aa9-ba6a-2da32d658f46",
+    "inputs": [
+      {
+        "name": "X",
+        "type": "number",
+        "value": 0
+      },
+      {
+        "name": "Y",
+        "type": "number",
+        "value": 2
+      },
+      {
+        "name": "Z",
+        "type": "number",
+        "value": 0
+      }
+    ]
+  },
+  {
+    "name": "Move",
+    "inputs": [
+      {
+        "name": "T",
+        "type": "link",
+        "value": "d0d21888-51e1-4aa9-ba6a-2da32d658f46.V"
+      },
+      {
+        "name": "G",
+        "type": "link",
+        "value": "60b87694-eaa4-4f17-8740-42355979dd71.S"
+      }
+    ]
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Vec",
+    "id": "d0d21888-51e1-4aa9-ba6a-2da32d658f46",
+    "inputs": [
+      {
+        "name": "X",
+        "type": "number",
+        "value": 2
+      },
+      {
+        "name": "Y",
+        "type": "number",
+        "value": 2
+      },
+      {
+        "name": "Z",
+        "type": "number",
+        "value": 2
+      }
+    ]
+  },
+  {
+    "name": "Move",
+    "inputs": [
+      {
+        "name": "T",
+        "type": "link",
+        "value": "d0d21888-51e1-4aa9-ba6a-2da32d658f46.V"
+      },
+      {
+        "name": "G",
+        "type": "brep",
+        "value": "geo"
+      }
+    ]
+  }
+]

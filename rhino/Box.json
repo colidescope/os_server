@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Box",
+    "inputs": [
+      {
+        "name": "X",
+        "type": "number",
+        "value": 1
+      },
+      {
+        "name": "Y",
+        "type": "number",
+        "value": 1
+      },
+      {
+        "name": "Z",
+        "type": "number",
+        "value": 1
+      }
+    ]
+  }
+]

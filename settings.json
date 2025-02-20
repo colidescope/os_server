@@ -1,0 +1,7 @@
+{
+  "editor.formatOnSave": true,
+  "[xml]": {
+    "editor.defaultFormatter": "redhat.vscode-xml"
+    // or "DotJoshJohnson.xml" if using XML Tools
+  }
+}
