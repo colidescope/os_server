@@ -1,4 +1,6 @@
-# open-cascade-starter
+# Open Shape Server
+
+![Deploy status](https://github.com/colidescope/os_server/actions/workflows/deploy.yml/badge.svg)
 
 ## Install conda
 
@@ -32,7 +34,7 @@ run_local.bat
 
 ```
 gcloud auth login
-gcloud config set project [PROJECT_NAME]
+gcloud config set project open-shape-server
 ```
 
 4. Enable Google Cloud Run service:
@@ -45,40 +47,40 @@ gcloud services enable run.googleapis.com
 
 ```
 gcloud services enable artifactregistry.googleapis.com
-gcloud artifacts repositories create py-occ-server --repository-format=docker --location=us-central1
+gcloud artifacts repositories create os-server --repository-format=docker --location=us-central1
 ```
 
 1. Build container image:
 
 ```
-docker build -t py-occ-server .
+docker build -t os-server .
 ```
 
 6. Deploy on local: http://localhost:8000/
 
 ```
-docker run --env-file .env -p 8000:8000 py-occ-server
+docker run --env-file .env -p 8000:8000 os-server
 ```
 
 7. Give build a tag to register with Google Artifact Registry
 
 ```
-docker tag py-occ-server us-central1-docker.pkg.dev/[PROJECT_NAME]/py-occ-server/py-occ-server:latest
+docker tag os-server us-central1-docker.pkg.dev/[PROJECT_NAME]/os-server/os-server:latest
 ```
 
 8. Push latest image to Google Artifact Registry
 
 ```
-docker push us-central1-docker.pkg.dev/[PROJECT_NAME]/py-occ-server/py-occ-server:latest
+docker push us-central1-docker.pkg.dev/[PROJECT_NAME]/os-server/os-server:latest
 ```
 
 9. Deploy latest image on Google Cloud Run with these settings (keep remaining default):
 
 ```
-gcloud run deploy py-occ-server --image=[LOCATION]-docker.pkg.dev/[PROJECT_ID]/py-occ-server/py-occ-server:latest --platform=managed --region=us-central1 --allow-unauthenticated --port=8000
+gcloud run deploy os-server --image=[LOCATION]-docker.pkg.dev/[PROJECT_ID]/os-server/os-server:latest --platform=managed --region=us-central1 --allow-unauthenticated --port=8000
 ```
 
-Once deployed, API will be accessible at the URL specified on the service details page: https://console.cloud.google.com/run/detail/us-central1/py-occ-server/
+Once deployed, API will be accessible at the URL specified on the service details page: https://console.cloud.google.com/run/detail/us-central1/os-server/
 
 ![image](https://github.com/user-attachments/assets/549f8500-0887-4603-bb6d-790b956380d6)
 
@@ -90,17 +92,11 @@ To modify your deployment settings, click the `Edit & Deploy New Version` button
 
 ## Environment variables
 
-The following variables must be in the environment. For local development, place them in a file called `.env` in the root of the project.
+The following variables must be set as `Repository secrets` in the Github repo for the Github Actions CI/CD to work.
 
 ```
-S3_BUCKET_NAME=[the name of the S3 bucket to save generated geometry]
-AWS_ACCESS_KEY_ID=[your aws key]
-AWS_SECRET_ACCESS_KEY=[your key secret]
-S3_REGION=[the region where the S3 bucket is hosted, ex. 'us-east-1']
-```
-
-When deploying to the cloud, specify the environment variables as part of the employment. For production environment, an additional variable is needed:
-
-```
-ENV=PROD
+SERVICE_NAME: os-server
+REGION: us-central1
+GCP_SA_KEY: [GCloud service account key]
+GCP_PROJECT_ID: open-shape-server
 ```

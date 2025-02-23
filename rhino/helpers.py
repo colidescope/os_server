@@ -14,10 +14,12 @@ def call_create_object_api(script):
     and returns the response JSON.
     """
     
-    # DEV / LOCAL
+    # LOCAL
     # conn = httplib.HTTPConnection("127.0.0.1", 8000)
+    # DEV
+    # conn = httplib.HTTPSConnection("py-occ-server-1056113226980.us-central1.run.app", 443)
     # PROD
-    conn = httplib.HTTPSConnection("py-occ-server-1056113226980.us-central1.run.app", 443)
+    conn = httplib.HTTPSConnection("os-server-939056091980.us-central1.run.app", 443)
     
     # Prepare the JSON request body
     body = json.dumps({
