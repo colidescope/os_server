@@ -25,7 +25,8 @@ if ENV != "PROD":
 app = FastAPI()
 
 origins = [
-    "https://openshape.netlify.app"
+    "https://openshape.netlify.app",
+    "https://synthyon.netlify.app",
 ]
 
 app.add_middleware(
