@@ -10,10 +10,23 @@ from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Core.StlAPI import StlAPI_Writer
 from OCC.Extend.DataExchange import read_step_file, write_step_file
 
+from OCC.Core.STEPControl import STEPControl_Reader
+from OCC.Core.IGESControl import IGESControl_Reader
+from OCC.Core.TopExp import TopExp_Explorer
+from OCC.Core.TopAbs import TopAbs_FACE
+from OCC.Core.TopoDS import TopoDS_Shape, TopoDS_Face, topods
+from OCC.Core.BRep import BRep_Builder, BRep_Tool
+import OCC.Core.BRepTools as BRepTools
+from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+from OCC.Core.TopLoc import TopLoc_Location
+
 import os, json
 from collections import deque
 from uuid import uuid4
 import base64
+import tempfile
+import requests
+from typing import Optional, Tuple, List, Dict
 
 from dotenv import load_dotenv
 
@@ -37,6 +50,156 @@ app.add_middleware(
     allow_methods=["*"],         # or list e.g. ["GET", "POST"]
     allow_headers=["*"],         # or list e.g. ["Authorization", "Content-Type"]
 )
+
+# Pydantic model for request
+class ConvertRequest(BaseModel):
+    srcUrl: str
+    filename: Optional[str] = None
+    contentType: Optional[str] = None
+
+def read_shape_with_occ(path: str) -> TopoDS_Shape:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ['.step', '.stp']:
+        reader = STEPControl_Reader()
+        status = reader.ReadFile(path)
+        if status != 1:
+            raise RuntimeError('Failed to read STEP file')
+        reader.TransferRoots()
+        return reader.OneShape()
+
+    if ext in ['.iges', '.igs']:
+        reader = IGESControl_Reader()
+        status = reader.ReadFile(path)
+        if status != 1:
+            raise RuntimeError('Failed to read IGES file')
+        reader.TransferRoots()
+        return reader.OneShape()
+
+    if ext == '.brep':
+        shape = TopoDS_Shape()
+        builder = BRep_Builder()
+        if not BRepTools.Read(shape, path, builder):
+            raise RuntimeError('Failed to read BREP file')
+        return shape
+
+    # STL/OBJ fallback via trimesh if available
+    if ext in ['.stl', '.obj'] and trimesh is not None:
+        return None # signal to use trimesh path
+
+    raise RuntimeError(f'Unsupported extension: {ext}')
+
+def shape_to_tri_mesh(
+    shape: TopoDS_Shape,
+    lin_deflection: float = 0.5,
+    ang_deflection: float = 0.5,
+) -> Tuple[List[List[float]], List[List[int]]]:
+    """
+    Triangulate a TopoDS_Shape and return (vertices, faces) with deduped vertices.
+    Faces are triangles [i1,i2,i3].
+    """
+    # Ensure the shape is meshed
+    # (args signature varies by version; this form is broadly compatible)
+    BRepMesh_IncrementalMesh(shape, lin_deflection, False, ang_deflection, True)
+
+    surfaces = []
+    num_verts = 0
+    num_faces = 0
+
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        
+        vertices: List[List[float]] = []
+        faces: List[List[int]] = []
+        vmap: Dict[Tuple[int, int, int], int] = {}
+
+        face = topods.Face(exp.Current())
+
+        loc = TopLoc_Location()
+        h_triangulation = BRep_Tool.Triangulation(face, loc)
+
+        # Some versions return None; others a null handle
+        if not h_triangulation:
+            exp.Next()
+            continue
+        # Handle -> object
+        tri = getattr(h_triangulation, "GetObject", lambda: h_triangulation)()
+
+        # Still nothing? skip
+        if not tri or tri.NbTriangles() == 0:
+            exp.Next()
+            continue
+
+        trsf = loc.Transformation()
+
+        # Iterate triangles (1-based indices)
+        for ti in range(1, tri.NbTriangles() + 1):
+            t = tri.Triangle(ti)
+            i1, i2, i3 = t.Get()
+
+            tri_idx: List[int] = []
+            for ii in (i1, i2, i3):
+                # Use Node(i) and apply the face location transform
+                gp = tri.Node(ii).Transformed(trsf)
+                key = (round(gp.X() * 1_000_000), round(gp.Y() * 1_000_000), round(gp.Z() * 1_000_000))
+                idx = vmap.get(key)
+                if idx is None:
+                    idx = len(vertices)
+                    vmap[key] = idx
+                    vertices.append([float(gp.X()), float(gp.Y()), float(gp.Z())])
+                tri_idx.append(idx)
+
+            faces.append(tri_idx)
+
+        surfaces.append({ "vertices": vertices, "faces": faces})
+        num_verts += len(vertices)
+        num_faces += len(faces)
+
+        exp.Next()
+
+    return surfaces, num_verts, num_faces
+
+def trimesh_to_arrays(mesh: 'trimesh.Trimesh') -> Tuple[List[List[float]], List[List[int]]]:
+    v = mesh.vertices.tolist()
+    f = mesh.faces.tolist()
+    return { "vertices": v, "faces": f}, len(v), len(f)
+
+@app.post('/convert')
+def convert(req: ConvertRequest):
+        
+    # 1) Download source via HTTPS to a temp file
+    with tempfile.TemporaryDirectory() as td:
+        fname = req.filename or 'source'
+        src_path = os.path.join(td, fname)
+        try:
+            with requests.get(req.srcUrl, stream=True, timeout=120) as r:
+                r.raise_for_status()
+                with open(src_path, 'wb') as f:
+                    for chunk in r.iter_content(1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f'Download failed: {e}')
+
+        # 2) Convert
+        try:
+            shape = read_shape_with_occ(src_path)
+            if shape is None:
+                if trimesh is None:
+                    raise RuntimeError('trimesh not available for OBJ/STL fallback')
+                mesh = trimesh.load(src_path, force='mesh') # type: ignore
+                surfaces, num_verts, num_faces = trimesh_to_arrays(mesh)
+            else:
+                surfaces, num_verts, num_faces = shape_to_tri_mesh(shape)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f'Conversion failed: {e}')
+
+        # 3) Return the exact JSON string format
+        mesh_str = json.dumps(surfaces, separators=(',', ':'))
+        return {
+            'mesh': mesh_str,
+            'vertexCount': num_verts,
+            'triangleCount': num_faces,
+        }
 
 class CreateObjectBody(BaseModel):
     script: str
@@ -275,23 +438,6 @@ async def run_script(object_data: CreateObjectBody):
         return {
             "outputs": output_results
         }
-    
-        # ---
-
-        # s3_key = "geo_files/{}".format(local_filename)
-        # with open(local_filename, "rb") as file:
-        #     s3_client.upload_fileobj(file, S3_BUCKET_NAME, s3_key)
-
-        # # Generate a pre-signed URL for downloading the file
-        # s3_file_url = s3_client.generate_presigned_url(
-        #     "get_object",
-        #     Params={"Bucket": S3_BUCKET_NAME, "Key": s3_key},
-        #     ExpiresIn=3600  # URL expiration time in seconds
-        # )
-
-        # return {
-        #     "path_to_file": s3_file_url
-        # }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute script: {e}")
