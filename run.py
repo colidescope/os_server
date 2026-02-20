@@ -1,7 +1,7 @@
 import sys, os, json, pickle
 
 from helpers import log
-from geom.occ_helpers import mesh_surface_to_occ_face, face_area, mesh_to_occ_solid
+from geom.occ_helpers import mesh_surface_to_occ_face, face_area, mesh_to_occ_solid, shape_to_tri_mesh
 from geom.occ_backend import OCCBackend
 from scripts.bracket import main
 # from scripts.test import main
@@ -117,8 +117,14 @@ def get_all_data(inputs):
         material_bracket=inputs.get("material_bracket"),
     )
 
-    # log(result)
-    # print(result)
+    bracket_shape = result["bracket_solid"]._topods()        # TopoDS_Shape (or OCCSolid.shape)
+    # bolt_shapes = result.get("bolts_geo", [])
+    
+    surfaces, num_verts, num_faces = shape_to_tri_mesh(bracket_shape)
+
+    print(surfaces)
+    print(num_verts)
+    print(num_faces)
     
     return result
 

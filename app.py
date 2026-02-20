@@ -8,6 +8,8 @@ from geom.occ_backend import OCCBackend
 from scripts.bracket import main
 
 import os, json, tempfile, requests
+from uuid import uuid4
+import base64
 from collections import deque
 from typing import Optional, Tuple, List, Dict
 from dotenv import load_dotenv
@@ -32,6 +34,42 @@ app.add_middleware(
     allow_methods=["*"],         # or list e.g. ["GET", "POST"]
     allow_headers=["*"],         # or list e.g. ["Authorization", "Content-Type"]
 )
+
+## Helpers ##
+
+def geo_to_step_base64(geo):
+    # Save file locally
+    local_filename = "{}.step".format(uuid4())
+    write_step_file(geo, local_filename)
+
+    # Read STEP file and encode it as base64
+    with open(local_filename, "rb") as f:
+        step_data = base64.b64encode(f.read()).decode("utf-8")
+
+    # Remove temp file
+    os.remove(local_filename)
+    
+    return step_data
+
+def geo_to_stl_base64(geo):
+    # 2) Mesh the shape so it can be exported as STL
+    #    (parameters: linear deflection=0.1, angular deflection=0.1, parallel=False)
+    BRepMesh_IncrementalMesh(geo, 0.1, True, 0.1, True)
+
+    # Save file locally
+    local_filename = "{}.stl".format(uuid4())
+    writer = StlAPI_Writer()
+    writer.Write(geo, local_filename)
+
+    # 4) Read file & encode to base64
+    with open(local_filename, "rb") as f:
+        # stl_data = f.read()
+        stl_data = base64.b64encode(f.read()).decode("utf-8")
+
+    # Remove temp file
+    os.remove(local_filename)
+    
+    return stl_data
 
 # Pydantic model for request
 class ConvertRequest(BaseModel):
@@ -73,6 +111,7 @@ def convert(req: ConvertRequest):
 
 # Pydantic model for request
 class BracketRequest(BaseModel):
+    format: str
     geo: str
 
 @app.post('/run-bracket')
@@ -81,6 +120,7 @@ async def run_bracket(req: BracketRequest):
     try:
     
         geo = json.loads(req.geo)
+        output_format = req.format
 
         if len(geo) != 2:
             raise HTTPException(status_code=400, detail="Expected exactly 2 surfaces in srf[]")
@@ -110,7 +150,7 @@ async def run_bracket(req: BracketRequest):
             free_objects=[],
 
             min_edge_clearance=50.0,
-            num_ribs=2,
+            num_ribs=1,
             init_plate_thickness=10.0,
             
             bolt_spacing_1=2.0,
@@ -126,18 +166,35 @@ async def run_bracket(req: BracketRequest):
             material_bracket="Steel",
         )
 
-        bracket_shape = result["bracket_solid"]          # TopoDS_Shape (or OCCSolid.shape)
+        bracket_shape = result["bracket_solid"]._topods()        # TopoDS_Shape (or OCCSolid.shape)
         bolt_shapes = result.get("bolts_geo", [])
 
-        mesh_str = ""
-        num_verts = 0
-        num_faces = 0
-    
+        output = {}
+
+        if output_format == "STEP":
+            output["value"] = geo_to_step_base64(bracket_shape)
+            output["format"] = output_format
+        elif output_format == "STL":
+            output["value"] = geo_to_stl_base64(bracket_shape)
+            output["format"] = output_format
+        
         return {
-                'mesh': mesh_str,
-                'vertexCount': num_verts,
-                'triangleCount': num_faces,
-            }
+            "outputs": [output]
+        }
+
+        ## Return the exact JSON string format ##
+        
+        # Convert
+        surfaces, num_verts, num_faces = shape_to_tri_mesh(bracket_shape)
+
+        mesh_str = json.dumps(surfaces, separators=(',', ':'))
+
+        return {
+            'mesh': mesh_str,
+            'vertexCount': num_verts,
+            'triangleCount': num_faces,
+        }
+        
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute run-bracket script: {e}")
@@ -203,40 +260,6 @@ function_map = {
 @app.get("/items")
 def get_items():
     return list(function_map)
-
-def geo_to_step_base64(geo):
-    # Save file locally
-    local_filename = "{}.step".format(uuid4())
-    write_step_file(geo, local_filename)
-
-    # Read STEP file and encode it as base64
-    with open(local_filename, "rb") as f:
-        step_data = base64.b64encode(f.read()).decode("utf-8")
-
-    # Remove temp file
-    os.remove(local_filename)
-    
-    return step_data
-
-def geo_to_stl_base64(geo):
-    # 2) Mesh the shape so it can be exported as STL
-    #    (parameters: linear deflection=0.1, angular deflection=0.1, parallel=False)
-    BRepMesh_IncrementalMesh(geo, 0.1, True, 0.1, True)
-
-    # Save file locally
-    local_filename = "{}.stl".format(uuid4())
-    writer = StlAPI_Writer()
-    writer.Write(geo, local_filename)
-
-    # 4) Read file & encode to base64
-    with open(local_filename, "rb") as f:
-        # stl_data = f.read()
-        stl_data = base64.b64encode(f.read()).decode("utf-8")
-
-    # Remove temp file
-    os.remove(local_filename)
-    
-    return stl_data
 
 def find_execution_order(components):
     """

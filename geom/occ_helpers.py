@@ -43,6 +43,7 @@ from OCC.Core.IGESControl import IGESControl_Reader
 
 from OCC.Core.TopLoc import TopLoc_Location
 
+### MESH SURFACE TO OCC FACE ###
 
 def _positions_dict_to_vertices(pos: Dict[str, float], item_size: int = 3) -> List[Tuple[float,float,float]]:
     # positions is {"0": x0, "1": y0, ...} in your payload
@@ -146,6 +147,13 @@ def mesh_surface_to_occ_face(positions: Dict[str, float], indices: Dict[str, int
 
     return face_mk.Face()
 
+def face_area(face) -> float:
+    props = GProp_GProps()
+    brepgprop_SurfaceProperties(face, props)
+    return props.Mass()  # for SurfaceProperties, "Mass" == area
+
+### SOLID MESH TO OCC SOLID ###
+
 def mesh_to_occ_solid(
     positions: Dict[str, float],
     indices: Dict[str, int],
@@ -231,10 +239,7 @@ def mesh_to_occ_solid(
 
     return solid
 
-def face_area(face) -> float:
-    props = GProp_GProps()
-    brepgprop_SurfaceProperties(face, props)
-    return props.Mass()  # for SurfaceProperties, "Mass" == area
+### CONVERT HELPERS ###
 
 def read_shape_with_occ(path: str) -> TopoDS_Shape:
     ext = os.path.splitext(path)[1].lower()
@@ -261,43 +266,7 @@ def read_shape_with_occ(path: str) -> TopoDS_Shape:
             raise RuntimeError('Failed to read BREP file')
         return shape
 
-    # STL/OBJ fallback via trimesh if available
-    if ext in ['.stl', '.obj'] and trimesh is not None:
-        return None # signal to use trimesh path
-
     raise RuntimeError(f'Unsupported extension: {ext}')
-
-def _collect_subshapes(root: TopoDS_Shape, ttype):
-    parts = []
-    exp = TopExp_Explorer(root, ttype)
-    while exp.More():
-        parts.append(exp.Current())
-        exp.Next()
-    return parts
-
-def split_into_meaningful_parts(shape: TopoDS_Shape):
-    """
-    Try to split the shape into 'objects':
-      1) Prefer SOLIDs (most CAD 'parts')
-      2) If no solids, use SHELLs
-      3) If no shells, use FACEs (last resort)
-    Returns a list[TopoDS_Shape]. If the shape already is one such entity,
-    you'll get a single-item list.
-    """
-    parts = _collect_subshapes(shape, TopAbs_SOLID)
-    print(parts)
-    if parts:
-        return parts
-    parts = _collect_subshapes(shape, TopAbs_SHELL)
-    print(parts)
-    if parts:
-        return parts
-    parts = _collect_subshapes(shape, TopAbs_FACE)
-    print(parts)
-    if parts:
-        return parts
-    # Fallback: nothing exploded; return the original as one part
-    return [shape]
 
 def shape_to_tri_mesh(
     shape: TopoDS_Shape,
@@ -420,16 +389,16 @@ def shape_to_tri_mesh(
     total_f = 0
 
     for faces_group in face_groups:
-        print("-")
-        print(faces_group)
         elem, nv, nf = triangulate_face_group(faces_group)
-        print(elem, nv, nf)
         if nv > 0 and nf > 0:
             elements.append(elem)
             total_v += nv
             total_f += nf
 
     return elements, total_v, total_f
+
+
+### SERIALIZE OCC SHAPE TO MESH JSON ###
 
 # def trimesh_to_arrays(mesh: 'trimesh.Trimesh') -> Tuple[List[List[float]], List[List[int]]]:
 #     v = mesh.vertices.tolist()
@@ -501,7 +470,9 @@ def shape_to_mesh_payload(shape, linear_deflection: float = 0.5, angular_deflect
         "f": faces,
     }
 
-# --- exporters ---
+
+### EXPORTERS (NOT USED) ###
+
 def occ_to_step_base64(shape) -> str:
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, f"{uuid4()}.step")
