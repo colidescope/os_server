@@ -65,19 +65,19 @@ docker run --env-file .env -p 8000:8000 os-server
 7. Give build a tag to register with Google Artifact Registry
 
 ```
-docker tag os-server us-central1-docker.pkg.dev/[PROJECT_NAME]/os-server/os-server:latest
+docker tag os-server us-central1-docker.pkg.dev/open-shape-server/os-server/os-server:latest
 ```
 
 8. Push latest image to Google Artifact Registry
 
 ```
-docker push us-central1-docker.pkg.dev/[PROJECT_NAME]/os-server/os-server:latest
+docker push us-central1-docker.pkg.dev/open-shape-server/os-server/os-server:latest
 ```
 
 9. Deploy latest image on Google Cloud Run with these settings (keep remaining default):
 
 ```
-gcloud run deploy os-server --image=[LOCATION]-docker.pkg.dev/[PROJECT_ID]/os-server/os-server:latest --platform=managed --region=us-central1 --allow-unauthenticated --port=8000
+gcloud run deploy os-server --image=us-central1-docker.pkg.dev/open-shape-server/os-server/os-server:latest --platform=managed --region=us-central1 --allow-unauthenticated --port=8000
 ```
 
 Once deployed, API will be accessible at the URL specified on the service details page: https://console.cloud.google.com/run/detail/us-central1/os-server/
