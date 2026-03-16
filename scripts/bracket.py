@@ -46,7 +46,7 @@ def main(
     perp_1 = plane_1.z_axis().unitized()
     perp_2 = plane_2.z_axis().unitized()
 
-    (perp_1, perp_2) = geom.normalize_vector_pair(perp_1, perp_2)
+    # (perp_1, perp_2) = geom.normalize_vector_pair(perp_1, perp_2)
     
     plane_1 = geom.plane(plane_1.origin(), perp_1)
     plane_2 = geom.plane(plane_2.origin(), perp_2)
@@ -394,14 +394,14 @@ def main(
 
     if material_dictionary and material_free and material_bracket and free_objects:
 
-        solid_objects = [geom.solid(free_object) for free_object in free_objects]
+        # solid_objects = [geom.solid(free_object) for free_object in free_objects]
 
-        log(solid_objects)
+        # log(solid_objects)
         
         free_density = float(material_dictionary[material_free]["Density"])
         bracket_density = float(material_dictionary[material_bracket]["Density"])
 
-        free_volume = sum(obj.volume() for obj in solid_objects) / 1_000_000_000.0
+        free_volume = sum(obj.get('volume', 0) for obj in free_objects) / 1_000_000_000.0
 
         log(f"free_volume: {free_volume}")
         print(f"free_volume: {free_volume}")
@@ -415,9 +415,10 @@ def main(
         gravity_force_1 = free_mass * 9.81
         gravity_force_2 = combined_mass * 9.81
         
-        free_object = geom.solid(free_objects[0])
+        # free_object = geom.solid(free_objects[0])
+        # free_cg = free_object.centroid()
+        free_cg = geom.point(*free_objects[0].get('cg'))
 
-        free_cg = free_object.centroid()
         bracket_cg = bracket_solid.centroid()
 
         combined_cg = geom.point(

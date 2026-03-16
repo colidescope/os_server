@@ -3,9 +3,10 @@
 import os
 import tempfile
 import base64
+import math
 from uuid import uuid4
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any, Optional
 
 from geom.common import require
 
@@ -18,6 +19,7 @@ from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_COMPOUND, TopAbs_SHELL, TopAbs_SOLID
 from OCC.Core.TopoDS import TopoDS_Shape, topods, TopoDS_Iterator, TopoDS_Face, TopoDS_Solid
 
+from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.GProp import GProp_GProps
 
 from OCC.Core.BRepBuilderAPI import (
@@ -45,10 +47,10 @@ from OCC.Core.TopLoc import TopLoc_Location
 
 ### MESH SURFACE TO OCC FACE ###
 
-def _positions_dict_to_vertices(pos: Dict[str, float], item_size: int = 3) -> List[Tuple[float,float,float]]:
+def _positions_dict_to_vertices(pos: List[float], item_size: int = 3) -> List[Tuple[float,float,float]]:
     # positions is {"0": x0, "1": y0, ...} in your payload
     arr = [0.0] * len(pos)
-    for k, v in pos.items():
+    for k, v in enumerate(pos):
         arr[int(k)] = float(v)
     if item_size != 3:
         raise ValueError(f"Expected itemSize=3, got {item_size}")
@@ -59,9 +61,9 @@ def _positions_dict_to_vertices(pos: Dict[str, float], item_size: int = 3) -> Li
         verts.append((arr[i], arr[i+1], arr[i+2]))
     return verts
 
-def _indices_dict_to_tris(ind: Dict[str, int]) -> List[Tuple[int,int,int]]:
+def _indices_dict_to_tris(ind: List[int]) -> List[Tuple[int,int,int]]:
     arr = [0] * len(ind)
-    for k, v in ind.items():
+    for k, v in enumerate(ind):
         arr[int(k)] = int(v)
     if len(arr) % 3 != 0:
         raise ValueError("indices length not divisible by 3")
@@ -127,7 +129,7 @@ def _boundary_loop_from_tris(tris: List[Tuple[int,int,int]]) -> List[int]:
 
     return loop
 
-def mesh_surface_to_occ_face(positions: Dict[str, float], indices: Dict[str, int], item_size: int = 3) -> TopoDS_Face:
+def mesh_surface_to_occ_face(positions: List[float], indices: List[int], item_size: int = 3) -> TopoDS_Face:
     verts = _positions_dict_to_vertices(positions, item_size)
     tris = _indices_dict_to_tris(indices)
     loop_ids = _boundary_loop_from_tris(tris)
@@ -155,8 +157,8 @@ def face_area(face) -> float:
 ### SOLID MESH TO OCC SOLID ###
 
 def mesh_to_occ_solid(
-    positions: Dict[str, float],
-    indices: Dict[str, int],
+    positions: List[float],
+    indices: List[int],
     item_size: int = 3,
     *,
     tol: float = 1e-6,
@@ -268,6 +270,49 @@ def read_shape_with_occ(path: str) -> TopoDS_Shape:
 
     raise RuntimeError(f'Unsupported extension: {ext}')
 
+def get_shape_volume(shape: TopoDS_Shape) -> Optional[dict]:
+    """
+    Return volume and center of gravity for a closed shape.
+
+    Returns:
+        {
+            "volume": float,
+            "cg": [x, y, z]
+        }
+
+    Returns None if OCC fails or the shape has no measurable volume.
+
+    Units are whatever units the source CAD file uses.
+    """
+    try:
+        props = GProp_GProps()
+        brepgprop.VolumeProperties(shape, props)
+
+        mass = props.Mass()
+
+        if mass is None:
+            return None
+
+        vol = float(mass)
+
+        if not math.isfinite(vol) or vol <= 0:
+            return None
+
+        cg = props.CentreOfMass()
+
+        return {
+            "volume": vol,
+            "cg": [
+                float(cg.X()),
+                float(cg.Y()),
+                float(cg.Z()),
+            ],
+        }
+
+    except Exception:
+        return None
+
+
 def shape_to_tri_mesh(
     shape: TopoDS_Shape,
     lin_deflection: float = 0.5,
@@ -275,128 +320,181 @@ def shape_to_tri_mesh(
 ):
     """
     Return (elements, total_vertex_count, total_triangle_count), where elements
-    is a list of {"vertices": [...], "faces": [...]}.
+    is a list of:
+        {
+            "surfaces": [
+                {"vertices": [...], "faces": [...]},
+                ...
+            ],
+            "volume": float | None
+        }
 
     Grouping strategy:
-      1) Group faces by owning SOLID (typical 'parts')
+      1) Group faces by owning SOLID
       2) If no SOLIDs, group by owning SHELL
       3) If neither, split a COMPOUND by its direct children
       4) Else, put all faces in one element
     """
 
-    # Mesh once; creates per-face triangulations. This does NOT merge parts.
+    # Mesh once; creates per-face triangulations
     BRepMesh_IncrementalMesh(shape, lin_deflection, False, ang_deflection, True)
 
     def triangulate_face_group(faces_group):
+        """
+        Convert a list of OCC faces into:
+          - a list of surface dicts
+          - total unique vertex count across all surfaces
+          - total triangle count across all surfaces
+
+        Each input face becomes one output surface.
+        """
         surfaces = []
+        total_vertices = 0
+        total_triangles = 0
 
         for face in faces_group:
             vertices = []
-            faces = []
+            triangles = []
             vmap = {}
-            
+
             loc = TopLoc_Location()
             htri = BRep_Tool.Triangulation(face, loc)
             if not htri:
                 continue
+
             tri = getattr(htri, "GetObject", lambda: htri)()
             if not tri or tri.NbTriangles() == 0:
                 continue
 
             trsf = loc.Transformation()
 
-            # OCC uses 1-based indexing for triangulations
+            # OCC triangulations are 1-based
             for ti in range(1, tri.NbTriangles() + 1):
                 t = tri.Triangle(ti)
                 i1, i2, i3 = t.Get()
                 tri_idx = []
+
                 for ii in (i1, i2, i3):
                     p = tri.Node(ii).Transformed(trsf)
-                    key = (round(p.X()*1_000_000), round(p.Y()*1_000_000), round(p.Z()*1_000_000))
+                    key = (
+                        round(p.X() * 1_000_000),
+                        round(p.Y() * 1_000_000),
+                        round(p.Z() * 1_000_000),
+                    )
+
                     idx = vmap.get(key)
                     if idx is None:
                         idx = len(vertices)
                         vmap[key] = idx
                         vertices.append([float(p.X()), float(p.Y()), float(p.Z())])
+
                     tri_idx.append(idx)
-                faces.append(tri_idx)
 
-            surfaces.append({"vertices": vertices, "faces": faces})
+                triangles.append(tri_idx)
 
-        return surfaces, len(vertices), len(faces)
+            if vertices and triangles:
+                surfaces.append({
+                    "vertices": vertices,
+                    "faces": triangles,
+                })
+                total_vertices += len(vertices)
+                total_triangles += len(triangles)
+
+        return surfaces, total_vertices, total_triangles
 
     def groups_by_owner_explore(root: TopoDS_Shape, owner_type):
         """
-        Build groups of faces by iterating each owner (SOLID or SHELL)
-        and collecting the faces under that owner. No MapShapesAndAncestors needed.
+        Return a list of tuples:
+            [(owner_shape, [face1, face2, ...]), ...]
+
+        owner_shape is the SOLID or SHELL that owns the face group.
         """
         groups = []
         owner_exp = TopExp_Explorer(root, owner_type)
+
         while owner_exp.More():
             owner = owner_exp.Current()
             face_list = []
+
             face_exp = TopExp_Explorer(owner, TopAbs_FACE)
             while face_exp.More():
                 face_list.append(topods.Face(face_exp.Current()))
                 face_exp.Next()
+
             if face_list:
-                groups.append(face_list)
+                groups.append((owner, face_list))
+
             owner_exp.Next()
+
         return groups
 
     # 1) Try SOLIDs
-    face_groups = groups_by_owner_explore(shape, TopAbs_SOLID)
-    print("solid_groups: {}".format(face_groups))
+    grouped_owners = groups_by_owner_explore(shape, TopAbs_SOLID)
+    print("solid_groups:", len(grouped_owners))
 
     # 2) Else SHELLs
-    if not face_groups:
-        face_groups = groups_by_owner_explore(shape, TopAbs_SHELL)
-        print("shell_groups: {}".format(face_groups))
+    if not grouped_owners:
+        grouped_owners = groups_by_owner_explore(shape, TopAbs_SHELL)
+        print("shell_groups:", len(grouped_owners))
 
-    # 3) Else split compound by direct children (each child gets its faces)
-    if not face_groups and shape.ShapeType() == TopAbs_COMPOUND:
+    # 3) Else split compound by direct children
+    if not grouped_owners and shape.ShapeType() == TopAbs_COMPOUND:
         parts = []
         it = TopoDS_Iterator(shape)
+
         while it.More():
             child = it.Value()
             faces_group = []
+
             face_exp = TopExp_Explorer(child, TopAbs_FACE)
             while face_exp.More():
                 faces_group.append(topods.Face(face_exp.Current()))
                 face_exp.Next()
-            if faces_group:
-                parts.append(faces_group)
-            it.Next()
-        face_groups = parts
-        print("child_groups: {}".format(face_groups))
 
-    # 4) Else, one group with all faces (if any)
-    if not face_groups:
+            if faces_group:
+                parts.append((child, faces_group))
+
+            it.Next()
+
+        grouped_owners = parts
+        print("child_groups:", len(grouped_owners))
+
+    # 4) Else one group with all faces
+    if not grouped_owners:
         all_faces = []
         exp = TopExp_Explorer(shape, TopAbs_FACE)
+
         while exp.More():
             all_faces.append(topods.Face(exp.Current()))
             exp.Next()
+
         if all_faces:
-            face_groups = [all_faces]
-            print("final_groups: {}".format(face_groups))
+            grouped_owners = [(shape, all_faces)]
+            print("final_groups:", len(grouped_owners))
         else:
             return [], 0, 0
 
-    # Triangulate each group into its own element
     elements = []
     total_v = 0
     total_f = 0
 
-    for faces_group in face_groups:
-        elem, nv, nf = triangulate_face_group(faces_group)
-        if nv > 0 and nf > 0:
-            elements.append(elem)
-            total_v += nv
-            total_f += nf
+    for owner_shape, faces_group in grouped_owners:
+        surfaces, nv, nf = triangulate_face_group(faces_group)
+        if not surfaces:
+            continue
 
+        mass_props = get_shape_volume(owner_shape)
+
+        elements.append({
+            "surfaces": surfaces,
+            "volume": mass_props["volume"] if mass_props else None,
+            "cg": mass_props["cg"] if mass_props else None
+        })
+
+        total_v += nv
+        total_f += nf
+    print(elements)
     return elements, total_v, total_f
-
 
 ### SERIALIZE OCC SHAPE TO MESH JSON ###
 

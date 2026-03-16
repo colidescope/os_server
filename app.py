@@ -11,7 +11,8 @@ import os, json, tempfile, requests
 from uuid import uuid4
 import base64
 from collections import deque
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List, Dict, Any, Literal, Optional
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if not in production
@@ -97,43 +98,81 @@ def convert(req: ConvertRequest):
         # 2) Convert
         try:
             shape = read_shape_with_occ(src_path)
-            surfaces, num_verts, num_faces = shape_to_tri_mesh(shape)
+            elements, num_verts, num_faces = shape_to_tri_mesh(shape)
+
+            # New structure: list of objects, each with volume + surfaces
+            # geo_data = build_geo_payload(shape, surfaces)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f'Conversion failed: {e}')
 
         # 3) Return the exact JSON string format
-        mesh_str = json.dumps(surfaces, separators=(',', ':'))
+        mesh_str = json.dumps(elements, separators=(',', ':'))
         return {
             'mesh': mesh_str,
             'vertexCount': num_verts,
             'triangleCount': num_faces,
         }
 
-# Pydantic model for request
+class GeometryPayload(BaseModel):
+    positions: list[float]
+    indices: Optional[list[int]] = None
+    itemSize: int = Field(..., alias="itemSize")
+    space: Literal["world", "local"]
+
+
+class BracketGeoItem(BaseModel):
+    objectId: str
+    objectIndex: int
+    surfaceId: str
+    geometry: GeometryPayload
+    volume: Optional[float] = None
+    cg: Optional[list[float]] = None
+    supportType: Literal["fixed", "free"]
+    material: Optional[str] = None
+
+
 class BracketRequest(BaseModel):
-    format: str
-    geo: str
+    format: Literal["STEP", "STL"]
+    geo: list[BracketGeoItem]
 
-@app.post('/run-bracket')
+
+def normalize_material_name(material: Optional[str]) -> Optional[str]:
+    if material is None:
+        return None
+
+    mapping = {
+        "steel": "Steel",
+        "aluminum": "Aluminum",
+        "stainless-steel": "Steel",   # adjust if you have a stainless entry
+        "brass": "Steel",             # placeholder until supported
+        "plastic": "Aluminum",        # placeholder until supported
+    }
+
+    return mapping.get(material, material)
+
+
+@app.post("/run-bracket")
 async def run_bracket(req: BracketRequest):
-
-    try:
-    
-        geo = json.loads(req.geo)
+    # try:
+        geo = req.geo
         output_format = req.format
 
         if len(geo) != 2:
-            raise HTTPException(status_code=400, detail="Expected exactly 2 surfaces in srf[]")
+            raise HTTPException(
+                status_code=400,
+                detail="Expected exactly 2 selected surfaces in geo",
+            )
 
+        # Build OCC faces from incoming mesh surfaces
         face1 = mesh_surface_to_occ_face(
-            positions=geo[0]["geometry"]["positions"],
-            indices=geo[0]["geometry"]["indices"],
-            item_size=geo[0]["geometry"]["itemSize"],
+            positions=geo[0].geometry.positions,
+            indices=geo[0].geometry.indices,
+            item_size=geo[0].geometry.itemSize,
         )
         face2 = mesh_surface_to_occ_face(
-            positions=geo[1]["geometry"]["positions"],
-            indices=geo[1]["geometry"]["indices"],
-            item_size=geo[1]["geometry"]["itemSize"],
+            positions=geo[1].geometry.positions,
+            indices=geo[1].geometry.indices,
+            item_size=geo[1].geometry.itemSize,
         )
 
         a1 = face_area(face1)
@@ -141,63 +180,124 @@ async def run_bracket(req: BracketRequest):
         print(f"face1 area: {a1:.6f}")
         print(f"face2 area: {a2:.6f}")
 
+        # Determine which selected objects are free
+        free_objects = [
+            {
+                'cg': item.cg,
+                'volume': item.volume,
+            }
+            for item in geo
+            if item.supportType == "free"
+        ]
+
+        # Material selection
+        # Current main(...) signature appears to support one "material_free"
+        # and one "material_bracket", not per-object arbitrary materials.
+        # So here we derive a single material_free from whichever selected item
+        # is marked free. If none are free, default to Steel.
+        free_item = next((item for item in geo if item.supportType == "free"), None)
+        material_free = normalize_material_name(
+            free_item.material if free_item else "steel"
+        ) or "Steel"
+
+        material_bracket = "Steel"
+
+        # Optional debugging info
+        for item in geo:
+            print(
+                "selected surface:",
+                {
+                    "objectId": item.objectId,
+                    "surfaceId": item.surfaceId,
+                    "volume": item.volume,
+                    "supportType": item.supportType,
+                    "material": item.material,
+                },
+            )
+
         geom = OCCBackend()
 
         result = main(
             geom=geom,
             srf_1=face1,
             srf_2=face2,
-            free_objects=[],
+            free_objects=free_objects,
 
             min_edge_clearance=50.0,
-            num_ribs=1,
+            num_ribs=2,
             init_plate_thickness=10.0,
-            
+
             bolt_spacing_1=2.0,
             bolt_spacing_2=2.0,
             init_bolt_radius=8.0,
             max_bolt_dia=20.0,
 
             material_dictionary={
-                "Steel": {"Density": "7850", "Yield Strength": "250"},  # example
+                "Steel": {"Density": "7850", "Yield Strength": "250"},
                 "Aluminum": {"Density": "2700", "Yield Strength": "150"},
             },
-            material_free="Steel",
-            material_bracket="Steel",
+            material_free=material_free,
+            material_bracket=material_bracket,
         )
 
-        bracket_shape = result["bracket_solid"]._topods()        # TopoDS_Shape (or OCCSolid.shape)
+        bracket_shape = result["bracket_solid"]._topods()
         bolt_shapes = result.get("bolts_geo", [])
 
-        output = {}
+        outputs = {}
 
+        bracket_output: dict[str, Any] = {}
         if output_format == "STEP":
-            output["value"] = geo_to_step_base64(bracket_shape)
-            output["format"] = output_format
+            bracket_output["value"] = geo_to_step_base64(bracket_shape)
+            bracket_output["format"] = output_format
         elif output_format == "STL":
-            output["value"] = geo_to_stl_base64(bracket_shape)
-            output["format"] = output_format
-        
+            bracket_output["value"] = geo_to_stl_base64(bracket_shape)
+            bracket_output["format"] = output_format
+
+        outputs['mesh'] = [bracket_output]
+
+        data_keys = ['cps_bolts_1', 'cps_bolts_2']
+        for data_key in data_keys:
+            if data_key in result.keys():
+                outputs[data_key] = [pt._serialize() for pt in result.get(data_key)]
+
+        data_keys = ['reactions']
+        for data_key in data_keys:
+            if data_key in result.keys():
+                outputs[data_key] = result.get(data_key)
+
+        # If you later want to return bolts too, add them here.
+        # for bolt_shape in bolt_shapes:
+        #     outputs.append({
+        #         "value": geo_to_stl_base64(bolt_shape._topods() if hasattr(bolt_shape, "_topods") else bolt_shape),
+        #         "format": output_format,
+        #     })
+
         return {
-            "outputs": [output]
+            "outputs": outputs,
+            "meta": {
+                "input": [
+                    {
+                        "objectId": item.objectId,
+                        "surfaceId": item.surfaceId,
+                        "volume": item.volume,
+                        "supportType": item.supportType,
+                        "material": item.material,
+                    }
+                    for item in geo
+                ],
+                "freeObjects": free_objects,
+                "materialFree": material_free,
+                "materialBracket": material_bracket,
+            },
         }
 
-        ## Return the exact JSON string format ##
-        
-        # Convert
-        surfaces, num_verts, num_faces = shape_to_tri_mesh(bracket_shape)
-
-        mesh_str = json.dumps(surfaces, separators=(',', ':'))
-
-        return {
-            'mesh': mesh_str,
-            'vertexCount': num_verts,
-            'triangleCount': num_faces,
-        }
-        
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute run-bracket script: {e}")
+    # except HTTPException:
+    #     raise
+    # except Exception as e:
+    #     raise HTTPException(
+    #         status_code=500,
+    #         detail=f"Failed to execute run-bracket script: {e}",
+    #     )
 
 
 # OLD # 
