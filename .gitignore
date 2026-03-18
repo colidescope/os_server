@@ -3,3 +3,4 @@ __pycache__
 *.rhl
 *.3dmbak
 .env
+data/*.json
