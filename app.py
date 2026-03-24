@@ -337,14 +337,16 @@ async def run_bracket(req: BracketRequest):
         outputs: Dict[str, Any] = {}
 
         bracket_output: Dict[str, Any] = {}
-        if output_format == "STEP":
-            bracket_output["value"] = geo_to_step_base64(bracket_shape)
-            bracket_output["format"] = output_format
-        elif output_format == "STL":
-            bracket_output["value"] = geo_to_stl_base64(bracket_shape)
-            bracket_output["format"] = output_format
+        bracket_output_stp: Dict[str, Any] = {}
+        # if output_format == "STEP":
+        bracket_output_stp["value"] = geo_to_step_base64(bracket_shape)
+        bracket_output_stp["format"] = "STP"
+        # elif output_format == "STL":
+        bracket_output["value"] = geo_to_stl_base64(bracket_shape)
+        bracket_output["format"] = output_format
 
         outputs["mesh"] = [bracket_output]
+        outputs["stp"] = [bracket_output_stp]
 
         for data_key in ["cps_bolts_1", "cps_bolts_2"]:
             if data_key in result:
