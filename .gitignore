@@ -4,4 +4,4 @@ __pycache__
 *.3dmbak
 .env
 data/*.json
-log.json
+log.txt
