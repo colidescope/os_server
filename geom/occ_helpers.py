@@ -162,7 +162,6 @@ def mesh_to_occ_solid(
     item_size: int = 3,
     *,
     tol: float = 1e-6,
-    assume_positions_are_zxy: bool = False,
     fix: bool = True,
 ) -> TopoDS_Solid:
     """
@@ -170,17 +169,10 @@ def mesh_to_occ_solid(
 
     positions: dict of floats (flat array) in itemSize groups
     indices: dict of ints (flat array) in triples
-    assume_positions_are_zxy:
-        If True, interpret each vertex triple as [Z, X, Y] and convert to (X,Y,Z).
-        If False, interpret as standard [X, Y, Z].
     """
 
     verts = _positions_dict_to_vertices(positions, item_size)
     tris = _indices_dict_to_tris(indices)
-
-    # Optional unswizzle: [Z,X,Y] -> (X,Y,Z)
-    if assume_positions_are_zxy:
-        verts = [(x, y, z) for (z, x, y) in verts]
 
     # Build & sew triangle faces into a shell
     sewing = BRepBuilderAPI_Sewing(tol, True, True, True, False)
@@ -514,8 +506,8 @@ def shape_to_mesh_payload(shape, linear_deflection: float = 0.5, angular_deflect
     faces: List[List[int]] = []
     vmap: Dict[Tuple[int, int, int], int] = {}
 
-    def vkey(z: float, x: float, y: float, scale: float = 1e6):
-        return (int(round(z * scale)), int(round(x * scale)), int(round(y * scale)))
+    def vkey(x: float, y: float, z: float, scale: float = 1e6):
+        return (int(round(x * scale)), int(round(y * scale)), int(round(z * scale)))
 
     exp = TopExp_Explorer(shape, TopAbs_FACE)
     while exp.More():
@@ -539,13 +531,12 @@ def shape_to_mesh_payload(shape, linear_deflection: float = 0.5, angular_deflect
             y = float(p.Y())
             z = float(p.Z())
 
-            # 🔁 reorder to Z, X, Y
-            k = vkey(z, x, y)
+            k = vkey(x, y, z)
             gi = vmap.get(k)
             if gi is None:
                 gi = len(verts)
                 vmap[k] = gi
-                verts.append([z, x, y])  # ← reordered here
+                verts.append([x, y, z])
 
             local_to_global[i] = gi
 
@@ -564,7 +555,7 @@ def shape_to_mesh_payload(shape, linear_deflection: float = 0.5, angular_deflect
     require(verts and faces, "shape_to_mesh_payload produced empty mesh")
 
     return {
-        "v": verts,  # vertices now [Z, X, Y]
+        "v": verts,  # vertices are [X, Y, Z]
         "f": faces,
     }
 

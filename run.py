@@ -84,7 +84,6 @@ def get_all_data(inputs):
         indices=geo.get("indices"),
         item_size=geo.get("itemSize"),
         tol=1e-6,
-        assume_positions_are_zxy=False
     ) for geo in free_objects_data]  # set True if your vertices are [Z,X,Y]
 
     log(solids)

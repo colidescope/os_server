@@ -135,7 +135,7 @@ class OCCPoint:
         return self._p
 
     def _serialize(self) -> gp_Pnt:
-        return [self._p.Z(), self._p.X(), self._p.Y()]
+        return [self._p.X(), self._p.Y(), self._p.Z()]
 
 
 class OCCVector:
@@ -226,7 +226,7 @@ class OCCVector:
         return self._v
 
     def _serialize(self) -> list[float]:
-        return [float(self._v.Z()), float(self._v.X()), float(self._v.Y())]
+        return [float(self._v.X()), float(self._v.Y()), float(self._v.Z())]
 
 
 class OCCPlane:
@@ -271,8 +271,8 @@ class OCCPlane:
         n = self._pln.Axis().Direction()
 
         return {
-            "origin": [p.Z(), p.X(), p.Y()],
-            "normal": [n.Z(), n.X(), n.Y()],
+            "origin": [p.X(), p.Y(), p.Z()],
+            "normal": [n.X(), n.Y(), n.Z()],
         }
 
     def __str__(self):
@@ -551,7 +551,7 @@ class OCCCurve:
         Prefers exact pts_hint if available; otherwise uses unique vertices.
         """
         pts = self.to_points()
-        return [[float(p.z), float(p.x), float(p.y)] for p in pts]
+        return [[float(p.x), float(p.y), float(p.z)] for p in pts]
 
 
 class OCCCircle:
@@ -603,8 +603,8 @@ class OCCSolid:
         - plane YDirection becomes +Y
         - plane normal (ZDirection) becomes +Z   (i.e. aligned to world Z)
 
-        Output is in your preferred [Z, X, Y] ordering:
-        { "min": (zmin, xmin, ymin), "max": (zmax, xmax, ymax) }
+        Output is in [X, Y, Z] ordering:
+        { "min": (xmin, ymin, zmin), "max": (xmax, ymax, zmax) }
         """
         pln = _gp_pln_from_gplane(plane)
 
@@ -631,7 +631,7 @@ class OCCSolid:
         brepbndlib_Add(shp2, b)
         xmin, ymin, zmin, xmax, ymax, zmax = b.Get()
 
-        # Return in Z, X, Y order (per your convention)
+        # Return in X, Y, Z order.
         return {
             "min": (float(xmin), float(ymin), float(zmin)),
             "max": (float(xmax), float(ymax), float(zmax)),
